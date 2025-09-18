@@ -1,3 +1,6 @@
 # Optional dependencies used when fine-tuning sentence-transformer models.
 sentence-transformers>=2.2.2
 torch>=2.0.0
+datasets
+transformers[torch]
+accelerate>=0.26.0

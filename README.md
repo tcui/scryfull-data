@@ -86,7 +86,8 @@ python -m src.train_embeddings \
   --num-epochs 2 \
   --train-batch-size 64 \
   --min-group-size 2 \
-  --max-group-ratio 0.05
+  --max-group-ratio 0.05 \
+  --max-group-size 100
 ```
 
 Use `--use-tags` and `--use-tag-families` to control which label granularities
