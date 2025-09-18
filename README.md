@@ -70,3 +70,25 @@ rare `mechanic:*` tags into a catch-all `mechanic:other` bucket.
 For quick experimentation, see `data/tag_output/sample_tagged_cards.json` and
 the matching `sample_tag_embeddings.jsonl` output that demonstrate the expected
 record structure.
+
+## Embedding fine-tuning
+
+After preparing the embedding-ready export, fine-tune a transformer model using
+the provided training helper. The trainer builds multi-positive batches based on
+shared tags and tag families and optimises a contrastive
+`MultipleNegativesRankingLoss` objective:
+
+```bash
+python -m src.train_embeddings \
+  --input data/tag_output/tag_embeddings.jsonl \
+  --output-dir models/card-embeddings \
+  --model-name sentence-transformers/all-MiniLM-L12-v2 \
+  --num-epochs 2 \
+  --train-batch-size 64
+```
+
+Use `--use-tags` and `--use-tag-families` to control which label granularities
+form positive pairs, or `--max-pairs-per-group` to subsample very common tags.
+Provide `--eval-split` to reserve a hold-out set for binary classification
+evaluation during training. The script requires the `sentence-transformers` and
+`torch` packages when fine-tuning a model.
