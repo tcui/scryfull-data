@@ -137,6 +137,27 @@ class PairedExample:
     group: str
 
 
+class _TrainingProgressPrinter:
+    """Callback helper to report training progress."""
+
+    def __init__(self, total_epochs: int) -> None:
+        self.total_epochs = total_epochs
+
+    def __call__(self, score: Optional[float], epoch: int, steps: Optional[int]) -> None:
+        if score is None:
+            score_repr = "N/A"
+        else:
+            score_repr = f"{score:.4f}"
+        steps_repr = steps if steps is not None else 0
+        LOGGER.info(
+            "Training progress: epoch %d/%d, steps %d, eval score %s",
+            epoch + 1,
+            self.total_epochs,
+            steps_repr,
+            score_repr,
+        )
+
+
 def load_embedding_records(path: Path) -> List[Record]:
     """Load embedding-ready records from ``path``.
 
@@ -190,6 +211,8 @@ def build_group_index(
     groups_per_record: Sequence[Set[str]],
     *,
     min_group_size: int = 2,
+    max_group_size: Optional[int] = None,
+    max_group_ratio: Optional[float] = None,
 ) -> Dict[str, List[int]]:
     """Create a mapping from group label to the list of record indices."""
 
@@ -198,9 +221,37 @@ def build_group_index(
         for group in groups:
             index.setdefault(group, []).append(idx)
 
-    filtered_index = {group: idxs for group, idxs in index.items() if len(idxs) >= min_group_size}
+    filtered_index: Dict[str, List[int]] = {}
+    skipped_small = skipped_large = 0
+    skipped_ratio = 0
+    total_records = len(groups_per_record)
+    for group, idxs in index.items():
+        member_count = len(idxs)
+        if member_count < min_group_size:
+            skipped_small += 1
+            continue
+        if max_group_size is not None and member_count > max_group_size:
+            skipped_large += 1
+            continue
+        if max_group_ratio is not None and max_group_ratio > 0 and total_records:
+            ratio = member_count / total_records
+            if ratio > max_group_ratio:
+                skipped_ratio += 1
+                continue
+        filtered_index[group] = idxs
+
     LOGGER.info(
-        "Tracking %d groups (minimum size %d).", len(filtered_index), min_group_size
+        (
+            "Tracking %d groups (min size %d%s%s). "
+            "Skipped %d small, %d large, and %d high-frequency groups."
+        ),
+        len(filtered_index),
+        min_group_size,
+        f", max size {max_group_size}" if max_group_size is not None else "",
+        f", max ratio {max_group_ratio:.2f}" if max_group_ratio is not None else "",
+        skipped_small,
+        skipped_large,
+        skipped_ratio,
     )
     return filtered_index
 
@@ -336,7 +387,12 @@ def train_model(args: argparse.Namespace) -> None:
     groups_per_record = resolve_record_groups(
         records, use_tags=args.use_tags, use_tag_families=args.use_tag_families
     )
-    group_index = build_group_index(groups_per_record, min_group_size=args.min_group_size)
+    group_index = build_group_index(
+        groups_per_record,
+        min_group_size=args.min_group_size,
+        max_group_size=args.max_group_size,
+        max_group_ratio=args.max_group_ratio,
+    )
 
     rng = random.Random(args.seed)
     all_pairs = list(
@@ -356,6 +412,7 @@ def train_model(args: argparse.Namespace) -> None:
 
     train_examples = convert_pairs_to_examples(train_pairs, records)
     LOGGER.info("Prepared %d training pairs and %d evaluation pairs.", len(train_pairs), len(eval_pairs))
+    print(f"Formed {len(train_pairs)} training pairs.")
 
     drop_last = args.train_batch_drop_last and len(train_examples) >= args.train_batch_size
     from torch.utils.data import DataLoader
@@ -381,6 +438,14 @@ def train_model(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    progress_callback = _TrainingProgressPrinter(args.num_epochs)
+
+    LOGGER.info(
+        "Starting training over %d examples for %d epochs.",
+        len(train_examples),
+        args.num_epochs,
+    )
+
     model.fit(
         train_objectives=[(train_dataloader, train_loss)],
         epochs=args.num_epochs,
@@ -391,6 +456,8 @@ def train_model(args: argparse.Namespace) -> None:
         output_path=str(output_dir),
         evaluator=evaluator,
         save_best_model=bool(evaluator),
+        show_progress_bar=True,
+        callback=progress_callback,
     )
 
     LOGGER.info("Training completed. Model saved to %s", output_dir)
@@ -440,6 +507,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=_int_min(2),
         default=2,
         help="Minimum number of cards required for a tag to form training pairs",
+    )
+    group.add_argument(
+        "--max-group-size",
+        type=_int_min(2),
+        help="Skip tags that have more than this many associated cards",
+    )
+    group.add_argument(
+        "--max-group-ratio",
+        type=_float_range(0.0, 1.0, inclusive_min=False, inclusive_max=True),
+        default=0.05,
+        help=(
+            "Skip tags used by more than this fraction of records. "
+            "Set to 0 to disable ratio-based filtering."
+        ),
     )
     group.add_argument(
         "--max-pairs-per-group",
