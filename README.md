@@ -1,6 +1,18 @@
 # scryfull-data
 processing Scryfull data
 
+## Environment setup
+
+Create an isolated Python environment so the tooling does not interfere with
+other projects on your machine:
+
+```
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
 ## Tag analytics
 
 Run the `tag_analysis.py` helper to derive co-occurrence statistics and
